@@ -129,16 +129,13 @@ func printHelp(outputChannel chan<- string) {
     resume - Resume auto-redeploy
     cooldown (seconds) - Set auto-redeploy cooldown 'cooldown 60s'
     status - See current status
-	help - This help menu
+    help - This help menu
 	`
 
 	outputChannel <- help
 }
 
 func printStatus(state *AppState, outputChannel chan<- string) {
-	state.Lock()
-	defer state.Unlock()
-
 	outputChannel <- fmt.Sprintln("\n--- Current Status ---")
 	outputChannel <- fmt.Sprintf("Container ID: %s", state.containerID)
 	outputChannel <- fmt.Sprintf("Auto-Redeployment: %t", !state.paused)
