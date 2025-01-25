@@ -22,6 +22,7 @@ type AppState struct {
 	containerID string
 	activeTimer *time.Timer
 	paused      bool
+	lastChange  time.Time
 }
 
 func main() {
@@ -84,6 +85,9 @@ func main() {
 					outputChannel <- fmt.Sprintf("Invalid duration: %v", err)
 				}
 
+			case "status":
+				printStatus(state, outputChannel)
+
 			case "help":
 				printHelp(outputChannel)
 
@@ -124,10 +128,22 @@ func printHelp(outputChannel chan<- string) {
     pause - Pause auto-redeploy
     resume - Resume auto-redeploy
     cooldown (seconds) - Set auto-redeploy cooldown 'cooldown 60s'
-    help - This help menu
+    status - See current status
+	help - This help menu
 	`
 
 	outputChannel <- help
+}
+
+func printStatus(state *AppState, outputChannel chan<- string) {
+	state.Lock()
+	defer state.Unlock()
+
+	outputChannel <- fmt.Sprintln("\n--- Current Status ---")
+	outputChannel <- fmt.Sprintf("Container ID: %s", state.containerID)
+	outputChannel <- fmt.Sprintf("Auto-Redeployment: %t", !state.paused)
+	outputChannel <- fmt.Sprintf("Last Change: %v", state.lastChange)
+	outputChannel <- fmt.Sprintf("Cooldown: %v", state.cooldown)
 }
 
 func redeploy(containerID string, outputChannel chan<- string) {
