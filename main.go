@@ -63,23 +63,23 @@ func main() {
 			state.Lock()
 			switch cmd.Action {
 			case "redeploy":
-				outputChannel <- fmt.Sprintf("Redeploying container: %s", state.containerID)
+				outputChannel <- fmt.Sprintf("[!] Redeploying container: %s", state.containerID)
 				cancelTimer(state.activeTimer)
 				redeploy(state.containerID, outputChannel)
 
 			case "pause":
 				state.paused = true
 				cancelTimer(state.activeTimer)
-				outputChannel <- fmt.Sprintf("Auto-redeploying Paused for Container: %s", state.containerID)
+				outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Paused for Container: %s", state.containerID)
 
 			case "resume":
 				state.paused = false
-				outputChannel <- fmt.Sprintf("Auto-redeploying Enabled for Container: %s", state.containerID)
+				outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Enabled for Container: %s", state.containerID)
 
 			case "cooldown":
 				if duration, err := time.ParseDuration(cmd.Payload); err == nil {
 					state.cooldown = duration
-					outputChannel <- fmt.Sprintf("Cooldown set to %v", duration)
+					outputChannel <- fmt.Sprintf("[!] Cooldown set to %v", duration)
 				} else {
 					outputChannel <- fmt.Sprintf("Invalid duration: %v", err)
 				}
