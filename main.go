@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 type Command struct {
@@ -30,11 +32,20 @@ func main() {
 	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM)
 	cmdChannel := make(chan Command, 10)
 	outputChannel := make(chan string, 100)
+	eventChannel := make(chan fsnotify.Event, 100)
 
 	state := &AppState{
 		cooldown:    time.Minute,
 		containerID: "my_container",
+		paused:      false,
 	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		outputChannel <- fmt.Sprintf("Error creating watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
 
 	go func() {
 		for msg := range outputChannel {
@@ -47,10 +58,42 @@ func main() {
 	}()
 
 	outputChannel <- "PROMPT"
+
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+
+				if event.Has(fsnotify.Write) {
+					eventChannel <- event
+				}
+
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+
+				outputChannel <- fmt.Sprintf("Watcher Error: %v", err)
+			}
+		}
+	}()
+
+	err = watcher.Add("./testFolder")
+	if err != nil {
+		outputChannel <- fmt.Sprintf("Error adding watch directory: %v", err)
+		return
+	}
+
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
-			processInput(scanner.Text(), cmdChannel, outputChannel)
+			input := strings.TrimSpace(scanner.Text())
+			if input != "" {
+				processInput(input, cmdChannel, outputChannel)
+			}
 		}
 	}()
 
@@ -58,6 +101,7 @@ func main() {
 		select {
 		case <-sigChannel:
 			outputChannel <- "\nShutting Down"
+			close(outputChannel)
 			return
 
 		case cmd := <-cmdChannel:
@@ -97,6 +141,15 @@ func main() {
 
 			state.Unlock()
 			outputChannel <- "PROMPT"
+
+		case event := <-eventChannel:
+			state.Lock()
+
+			if !state.paused {
+				fileChange(state, event, outputChannel)
+			}
+
+			state.Unlock()
 		}
 	}
 }
@@ -150,5 +203,34 @@ func redeploy(containerID string, outputChannel chan<- string) {
 func cancelTimer(timer *time.Timer) {
 	if timer != nil {
 		timer.Stop()
+	}
+}
+
+func fileChange(state *AppState, event fsnotify.Event, outputChannel chan<- string) {
+	current := time.Now()
+	if state.activeTimer != nil {
+		return
+	}
+
+	outputChannel <- fmt.Sprintf("Change in %s", event.Name)
+
+	if current.Sub(state.lastChange) > state.cooldown {
+		outputChannel <- "[!] Change detected, starting redeployment"
+		state.activeTimer = time.AfterFunc(state.cooldown, func() {
+			state.Lock()
+			defer state.Unlock()
+
+			if !state.paused {
+				outputChannel <- "[!] Redeploying Container"
+				redeploy(state.containerID, outputChannel)
+				state.lastChange = time.Now()
+			}
+
+			state.activeTimer = nil
+			outputChannel <- "PROMPT"
+		})
+	} else {
+		outputChannel <- "change within cooldown, don't care"
+		outputChannel <- "PROMPT"
 	}
 }
