@@ -81,6 +81,12 @@ func main() {
 		}
 	}()
 
+	// to do: handle folders to watch from user
+	// watch ./testFolder
+	// watchAdd ./testFolder2
+	// watchRemove ./testFolder2
+	// watchList
+	// prints ./testFolder
 	err = watcher.Add("./testFolder")
 	if err != nil {
 		outputChannel <- fmt.Sprintf("Error adding watch directory: %v", err)
@@ -105,42 +111,7 @@ func main() {
 			return
 
 		case cmd := <-cmdChannel:
-			state.Lock()
-			switch cmd.Action {
-			case "redeploy":
-				outputChannel <- fmt.Sprintf("[!] Redeploying container: %s", state.containerID)
-				cancelTimer(state.activeTimer)
-				redeploy(state.containerID, outputChannel)
-
-			case "pause":
-				state.paused = true
-				cancelTimer(state.activeTimer)
-				outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Paused for Container: %s", state.containerID)
-
-			case "resume":
-				state.paused = false
-				outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Enabled for Container: %s", state.containerID)
-
-			case "cooldown":
-				if duration, err := time.ParseDuration(cmd.Payload); err == nil {
-					state.cooldown = duration
-					outputChannel <- fmt.Sprintf("[!] Cooldown set to %v", duration)
-				} else {
-					outputChannel <- fmt.Sprintf("Invalid duration: %v", err)
-				}
-
-			case "status":
-				printStatus(state, outputChannel)
-
-			case "help":
-				printHelp(outputChannel)
-
-			default:
-				outputChannel <- fmt.Sprintf("Unknown Command: %s", cmd.Action)
-			}
-
-			state.Unlock()
-			outputChannel <- "PROMPT"
+			handleCommand(cmd, state, outputChannel)
 
 		case event := <-eventChannel:
 			state.Lock()
@@ -233,4 +204,43 @@ func fileChange(state *AppState, event fsnotify.Event, outputChannel chan<- stri
 		outputChannel <- "change within cooldown, don't care"
 		outputChannel <- "PROMPT"
 	}
+}
+
+func handleCommand(cmd Command, state *AppState, outputChannel chan<- string) {
+	state.Lock()
+	switch cmd.Action {
+	case "redeploy":
+		outputChannel <- fmt.Sprintf("[!] Redeploying container: %s", state.containerID)
+		cancelTimer(state.activeTimer)
+		redeploy(state.containerID, outputChannel)
+
+	case "pause":
+		state.paused = true
+		cancelTimer(state.activeTimer)
+		outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Paused for Container: %s", state.containerID)
+
+	case "resume":
+		state.paused = false
+		outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Enabled for Container: %s", state.containerID)
+
+	case "cooldown":
+		if duration, err := time.ParseDuration(cmd.Payload); err == nil {
+			state.cooldown = duration
+			outputChannel <- fmt.Sprintf("[!] Cooldown set to %v", duration)
+		} else {
+			outputChannel <- fmt.Sprintf("Invalid duration: %v", err)
+		}
+
+	case "status":
+		printStatus(state, outputChannel)
+
+	case "help":
+		printHelp(outputChannel)
+
+	default:
+		outputChannel <- fmt.Sprintf("Unknown Command: %s", cmd.Action)
+	}
+
+	state.Unlock()
+	outputChannel <- "PROMPT"
 }
