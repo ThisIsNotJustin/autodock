@@ -28,8 +28,6 @@ type AppState struct {
 	watchDirs   map[string]bool
 }
 
-// list of watched dirs
-
 func main() {
 	sigChannel := make(chan os.Signal, 1)
 	signal.Notify(sigChannel, syscall.SIGINT, syscall.SIGTERM)

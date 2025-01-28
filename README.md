@@ -105,6 +105,77 @@ When the program starts, it initializes with default settings. You can interact 
     - ./config
    ```
 
+## Example Pt2
+```bash
+go run main.go
+> help
+  Available commands:
+    redeploy - Immediate deployment
+    pause - Pause auto-redeploy
+    resume - Resume auto-redeploy
+    cooldown (seconds) - Set auto-redeploy cooldown 'cooldown 60s'
+    status - See current status
+    watch (folder path) - Add folder to watch list
+    watchRemove (folder path) - Remove folder from watch list
+    watchList - Display list of folders watching for changes
+    reset - Remove all folders from watch list
+    help - This help menu
+
+> status
+
+--- Current Status ---
+
+Container ID: my_container
+Auto-Redeployment: true
+Last Change: 0001-01-01 00:00:00 +0000 UTC
+Cooldown: 1m0s
+> watchList
+--- Watched Folders ---
+> cooldown 30s
+[!] Cooldown set to 30s
+> watch ./testFolder
+Watching folder: ./testFolder
+> watchList
+--- Watched Folders ---
+./testFolder
+> Change in testFolder/text.txt
+[!] Change detected, starting redeployment
+[!] Redeploying Container
+Restarting container my_container
+> watch ./testFolder2
+Watching folder: ./testFolder2
+> watchList
+--- Watched Folders ---
+./testFolder
+./testFolder2
+> Change in testFolder2/text2.txt
+[!] Change detected, starting redeployment
+[!] Redeploying Container
+Restarting container my_container
+> watchList
+--- Watched Folders ---
+./testFolder
+./testFolder2
+> watchRemove ./testFolder2
+Removed ./testFolder2 from watch list
+> watchList
+--- Watched Folders ---
+./testFolder
+> status
+
+--- Current Status ---
+
+Container ID: my_container
+Auto-Redeployment: true
+Last Change: 2025-01-27 22:47:14.986287 -0600 CST m=+124.997843793
+Cooldown: 30s
+> reset
+Successfully reset watched folders
+> watchList
+--- Watched Folders ---
+> 
+```
+
 ---
 
 ## Acknowledgments
