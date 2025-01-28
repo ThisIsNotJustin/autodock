@@ -49,6 +49,10 @@ When the program starts, it initializes with default settings. You can interact 
   ```bash
   > watchList
   ```
+- Reset watched folders list.
+  ```bash
+  > reset
+  ```
 - Immediately redeploy the container.
   ```bash
   > redeploy
