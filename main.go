@@ -25,7 +25,10 @@ type AppState struct {
 	activeTimer *time.Timer
 	paused      bool
 	lastChange  time.Time
+	watchDirs   map[string]bool
 }
+
+// list of watched dirs
 
 func main() {
 	sigChannel := make(chan os.Signal, 1)
@@ -38,6 +41,7 @@ func main() {
 		cooldown:    time.Minute,
 		containerID: "my_container",
 		paused:      false,
+		watchDirs:   make(map[string]bool),
 	}
 
 	watcher, err := fsnotify.NewWatcher()
@@ -81,18 +85,6 @@ func main() {
 		}
 	}()
 
-	// to do: handle folders to watch from user
-	// watch ./testFolder
-	// watchAdd ./testFolder2
-	// watchRemove ./testFolder2
-	// watchList
-	// prints ./testFolder
-	err = watcher.Add("./testFolder")
-	if err != nil {
-		outputChannel <- fmt.Sprintf("Error adding watch directory: %v", err)
-		return
-	}
-
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
@@ -111,7 +103,7 @@ func main() {
 			return
 
 		case cmd := <-cmdChannel:
-			handleCommand(cmd, state, outputChannel)
+			handleCommand(cmd, state, watcher, outputChannel)
 
 		case event := <-eventChannel:
 			state.Lock()
@@ -153,6 +145,10 @@ func printHelp(outputChannel chan<- string) {
     resume - Resume auto-redeploy
     cooldown (seconds) - Set auto-redeploy cooldown 'cooldown 60s'
     status - See current status
+    watch (folder path) - Add folder to watch list
+    watchRemove (folder path) - Remove folder from watch list
+    watchList - Display list of folders watching for changes
+    reset - Remove all folders from watch list
     help - This help menu
 	`
 
@@ -206,7 +202,7 @@ func fileChange(state *AppState, event fsnotify.Event, outputChannel chan<- stri
 	}
 }
 
-func handleCommand(cmd Command, state *AppState, outputChannel chan<- string) {
+func handleCommand(cmd Command, state *AppState, watcher *fsnotify.Watcher, outputChannel chan<- string) {
 	state.Lock()
 	switch cmd.Action {
 	case "redeploy":
@@ -233,6 +229,48 @@ func handleCommand(cmd Command, state *AppState, outputChannel chan<- string) {
 
 	case "status":
 		printStatus(state, outputChannel)
+
+	case "watch":
+		if cmd.Payload == "" {
+			outputChannel <- "Please specify a folder ie 'watch ./testFolder1'"
+		} else {
+			err := watcher.Add(cmd.Payload)
+			if err != nil {
+				outputChannel <- fmt.Sprintf("Error adding directory: %v", err)
+				return
+			}
+
+			state.watchDirs[cmd.Payload] = true
+			outputChannel <- fmt.Sprintf("Watching folder: %s", cmd.Payload)
+		}
+
+	case "watchRemove":
+		if cmd.Payload == "" {
+			outputChannel <- "Please specify a folder to remove ie 'watchRemove .testFolder1'"
+		} else {
+			err := watcher.Remove(cmd.Payload)
+			if err != nil {
+				outputChannel <- fmt.Sprintf("Error removing folder: %v", err)
+				return
+			}
+
+			delete(state.watchDirs, cmd.Payload)
+			outputChannel <- fmt.Sprintf("Removed %s from watch list", cmd.Payload)
+		}
+
+	case "watchList":
+		outputChannel <- "--- Watched Folders ---"
+		for dir := range state.watchDirs {
+			outputChannel <- dir
+		}
+
+	case "reset":
+		for dir := range state.watchDirs {
+			watcher.Remove(dir)
+			delete(state.watchDirs, dir)
+		}
+
+		outputChannel <- "Successfully reset watched folders"
 
 	case "help":
 		printHelp(outputChannel)
