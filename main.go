@@ -263,21 +263,20 @@ func fileChange(state *AppState, event fsnotify.Event, outputChannel chan<- stri
 	outputChannel <- fmt.Sprintf("Change in %s", event.Name)
 
 	if current.Sub(state.lastChange) > state.cooldown {
-		outputChannel <- "[!] Change detected, starting redeployment"
-		state.activeTimer = time.AfterFunc(state.cooldown, func() {
-			state.Lock()
-			defer state.Unlock()
+		outputChannel <- "[!] Change detected, starting immediate redeployment"
+		if !state.paused {
+			state.activeTimer = time.AfterFunc(1*time.Nanosecond, func() {
+				state.Lock()
+				defer state.Unlock()
+				state.activeTimer = nil
+			})
 
-			if !state.paused {
-				outputChannel <- "[!] Redeploying Container"
-				redeploy(state, outputChannel)
-				state.lastChange = time.Now()
-			}
-
-			state.activeTimer = nil
-		})
+			outputChannel <- "[!] Redeploying Container"
+			redeploy(state, outputChannel)
+			state.lastChange = current
+		}
 	} else {
-		outputChannel <- "Change detected within cooldown, please wait\n"
+		outputChannel <- fmt.Sprintf("Change detected within %v cooldown, skipping", state.cooldown)
 		outputChannel <- "PROMPT"
 	}
 }
