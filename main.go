@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +28,7 @@ type AppState struct {
 	paused      bool
 	lastChange  time.Time
 	watchDirs   map[string]bool
+	inputPaused bool
 }
 
 func main() {
@@ -41,6 +44,16 @@ func main() {
 		paused:      false,
 		watchDirs:   make(map[string]bool),
 	}
+
+	if err := exec.Command("docker", "--version").Run(); err != nil {
+		outputChannel <- "Install Docker to use this program!"
+		os.Exit(1)
+	}
+	outputChannel <- "\n         Auto Docker"
+	outputChannel <- "-----------------------------"
+	outputChannel <- "Automated deployment system with file watching"
+	outputChannel <- "Type 'help' for list of available commands"
+	outputChannel <- "Press 'Ctrl + C' to escape this CLI tool or Docker terminal\n"
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -84,11 +97,21 @@ func main() {
 	}()
 
 	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			input := strings.TrimSpace(scanner.Text())
-			if input != "" {
-				processInput(input, cmdChannel, outputChannel)
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			state.Lock()
+			paused := state.inputPaused
+			state.Unlock()
+
+			if paused {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			os.Stdin.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			input, _, _ := reader.ReadLine()
+			if len(input) > 0 {
+				processInput(string(input), cmdChannel, outputChannel)
 			}
 		}
 	}()
@@ -154,15 +177,75 @@ func printHelp(outputChannel chan<- string) {
 }
 
 func printStatus(state *AppState, outputChannel chan<- string) {
-	outputChannel <- fmt.Sprintln("\n--- Current Status ---")
+	outputChannel <- fmt.Sprintln("--- Current Status ---")
 	outputChannel <- fmt.Sprintf("Container ID: %s", state.containerID)
 	outputChannel <- fmt.Sprintf("Auto-Redeployment: %t", !state.paused)
 	outputChannel <- fmt.Sprintf("Last Change: %v", state.lastChange)
-	outputChannel <- fmt.Sprintf("Cooldown: %v", state.cooldown)
+	outputChannel <- fmt.Sprintf("Cooldown: %v\n", state.cooldown)
 }
 
-func redeploy(containerID string, outputChannel chan<- string) {
-	outputChannel <- fmt.Sprintf("Restarting container %s", containerID)
+func redeploy(state *AppState, outputChannel chan<- string) {
+	go func() {
+		cwd, err := os.Getwd()
+		if err != nil {
+			outputChannel <- fmt.Sprintf("Error getting current directory: %v", err)
+			outputChannel <- "PROMPT"
+			return
+		}
+
+		state.Lock()
+		state.inputPaused = true
+		state.Unlock()
+
+		defer func() {
+			state.Lock()
+			state.inputPaused = false
+			state.Unlock()
+		}()
+
+		// docker in current terminal
+		outputChannel <- "Beginning Redeploy"
+		cmd := exec.Command("docker", "compose", "down")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			outputChannel <- fmt.Sprintf("Error: %v\nOutput: %s", err, string(output))
+			outputChannel <- "PROMPT"
+			return
+		}
+		outputChannel <- string(output)
+
+		// OS-specific terminal commands
+		var newcmd *exec.Cmd
+		switch runtime.GOOS {
+		case "linux": // linux
+			newcmd = exec.Command(
+				"xterm",
+				"-hold",
+				"-e",
+				fmt.Sprintf("cd %s && sudo docker compose up --build", cwd),
+			)
+		case "darwin": // macOS
+			newcmd = exec.Command(
+				"osascript",
+				"-e",
+				fmt.Sprintf(`tell application "Terminal" to do script "cd %s && sudo docker compose up --build"`, cwd),
+			)
+		default:
+			outputChannel <- "Unsupported OS for terminal separation"
+			outputChannel <- "PROMPT"
+			return
+		}
+
+		err = newcmd.Start()
+		if err != nil {
+			outputChannel <- fmt.Sprintf("Error starting terminal: %v", err)
+			outputChannel <- "PROMPT"
+			return
+		}
+
+		outputChannel <- "Redeploy running in new terminal window"
+		outputChannel <- "PROMPT"
+	}()
 }
 
 func cancelTimer(timer *time.Timer) {
@@ -187,42 +270,44 @@ func fileChange(state *AppState, event fsnotify.Event, outputChannel chan<- stri
 
 			if !state.paused {
 				outputChannel <- "[!] Redeploying Container"
-				redeploy(state.containerID, outputChannel)
+				redeploy(state, outputChannel)
 				state.lastChange = time.Now()
 			}
 
 			state.activeTimer = nil
-			outputChannel <- "PROMPT"
 		})
 	} else {
-		outputChannel <- "change within cooldown, don't care"
+		outputChannel <- "Change detected within cooldown, please wait\n"
 		outputChannel <- "PROMPT"
 	}
 }
 
 func handleCommand(cmd Command, state *AppState, watcher *fsnotify.Watcher, outputChannel chan<- string) {
 	state.Lock()
+	sendPrompt := true
+
 	switch cmd.Action {
 	case "redeploy":
 		outputChannel <- fmt.Sprintf("[!] Redeploying container: %s", state.containerID)
 		cancelTimer(state.activeTimer)
-		redeploy(state.containerID, outputChannel)
+		redeploy(state, outputChannel)
+		sendPrompt = false
 
 	case "pause":
 		state.paused = true
 		cancelTimer(state.activeTimer)
-		outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Paused for Container: %s", state.containerID)
+		outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Paused for Container: %s\n", state.containerID)
 
 	case "resume":
 		state.paused = false
-		outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Enabled for Container: %s", state.containerID)
+		outputChannel <- fmt.Sprintf("[!] Auto-Redeployment Enabled for Container: %s\n", state.containerID)
 
 	case "cooldown":
 		if duration, err := time.ParseDuration(cmd.Payload); err == nil {
 			state.cooldown = duration
-			outputChannel <- fmt.Sprintf("[!] Cooldown set to %v", duration)
+			outputChannel <- fmt.Sprintf("[!] Cooldown set to %v\n", duration)
 		} else {
-			outputChannel <- fmt.Sprintf("Invalid duration: %v", err)
+			outputChannel <- fmt.Sprintf("Invalid duration: %v\n", err)
 		}
 
 	case "status":
@@ -230,16 +315,16 @@ func handleCommand(cmd Command, state *AppState, watcher *fsnotify.Watcher, outp
 
 	case "watch":
 		if cmd.Payload == "" {
-			outputChannel <- "Please specify a folder ie 'watch ./testFolder1'"
+			outputChannel <- "Please specify a folder ie 'watch ./testFolder1'\n"
 		} else {
 			err := watcher.Add(cmd.Payload)
 			if err != nil {
-				outputChannel <- fmt.Sprintf("Error adding directory: %v", err)
+				outputChannel <- fmt.Sprintf("Error adding directory: %v\n", err)
 				return
 			}
 
 			state.watchDirs[cmd.Payload] = true
-			outputChannel <- fmt.Sprintf("Watching folder: %s", cmd.Payload)
+			outputChannel <- fmt.Sprintf("Watching folder: %s\n", cmd.Payload)
 		}
 
 	case "watchRemove":
@@ -248,12 +333,12 @@ func handleCommand(cmd Command, state *AppState, watcher *fsnotify.Watcher, outp
 		} else {
 			err := watcher.Remove(cmd.Payload)
 			if err != nil {
-				outputChannel <- fmt.Sprintf("Error removing folder: %v", err)
+				outputChannel <- fmt.Sprintf("Error removing folder: %v\n", err)
 				return
 			}
 
 			delete(state.watchDirs, cmd.Payload)
-			outputChannel <- fmt.Sprintf("Removed %s from watch list", cmd.Payload)
+			outputChannel <- fmt.Sprintf("Removed %s from watch list\n", cmd.Payload)
 		}
 
 	case "watchList":
@@ -261,6 +346,7 @@ func handleCommand(cmd Command, state *AppState, watcher *fsnotify.Watcher, outp
 		for dir := range state.watchDirs {
 			outputChannel <- dir
 		}
+		outputChannel <- "\n"
 
 	case "reset":
 		for dir := range state.watchDirs {
@@ -268,15 +354,18 @@ func handleCommand(cmd Command, state *AppState, watcher *fsnotify.Watcher, outp
 			delete(state.watchDirs, dir)
 		}
 
-		outputChannel <- "Successfully reset watched folders"
+		outputChannel <- "Successfully reset watched folders\n"
 
 	case "help":
 		printHelp(outputChannel)
 
 	default:
-		outputChannel <- fmt.Sprintf("Unknown Command: %s", cmd.Action)
+		outputChannel <- fmt.Sprintf("Unknown Command: %s\n", cmd.Action)
 	}
 
 	state.Unlock()
-	outputChannel <- "PROMPT"
+
+	if sendPrompt {
+		outputChannel <- "PROMPT"
+	}
 }
