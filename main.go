@@ -214,6 +214,12 @@ func redeploy(state *AppState, outputChannel chan<- string) {
 		}
 		outputChannel <- string(output)
 
+		/*
+			implement windows terminal
+			see if reusing the same terminal is possible
+			without having users install a third party terminal
+			or give option to use with tmux
+		*/
 		// OS-specific terminal commands
 		var newcmd *exec.Cmd
 		switch runtime.GOOS {
